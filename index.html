@@ -1,0 +1,235 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover"/>
+  <title>Notion Timer (Compact)</title>
+  <style>
+    :root {
+      --bg: #222B26;
+      --fg: #D7B043;
+      --fg-muted: #b49634;
+      --btn-bg: rgba(215, 176, 67, 0.08);
+      --btn-bg-hover: rgba(215, 176, 67, 0.16);
+      --ring: rgba(215, 176, 67, 0.45);
+    }
+    * { box-sizing: border-box; }
+    html, body {
+      height: 100%;
+      margin: 0;
+      background: var(--bg);
+      color: var(--fg);
+      font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Arial;
+    }
+    .wrap {
+      min-height: 100%;
+      display: grid;
+      place-items: center;
+      padding: 8px;
+    }
+    .card {
+      width: min(360px, 96vw);
+      background: transparent;
+      border: 1px solid var(--fg-muted);
+      border-radius: 12px;
+      padding: 12px;
+      box-shadow: 0 8px 20px rgba(0,0,0,0.25);
+      display: grid;
+      gap: 8px;
+    }
+    .section {
+      display: grid;
+      gap: 6px;
+    }
+    .label {
+      font-size: 12px;
+      letter-spacing: 0.02em;
+      opacity: 0.9;
+    }
+    .controls {
+      display: grid;
+      grid-template-columns: 1fr auto;
+      gap: 6px;
+      align-items: center;
+    }
+    input[type="number"] {
+      width: 100%;
+      padding: 8px 10px;
+      border-radius: 10px;
+      border: 1px solid var(--fg-muted);
+      background: var(--btn-bg);
+      color: var(--fg);
+      font-size: 14px;
+      outline: none;
+    }
+    input[type="number"]:focus {
+      box-shadow: 0 0 0 3px var(--ring);
+      border-color: var(--fg);
+    }
+    .display {
+      font-variant-numeric: tabular-nums;
+      font-size: clamp(56px, 10vw, 96px); /* keep big */
+      line-height: 1.05;
+      text-align: center;
+      letter-spacing: 0.04em;
+      margin: 4px 0 2px;
+      user-select: none;
+    }
+    .buttons {
+      display: grid;
+      grid-template-columns: 1fr;
+      gap: 6px;
+    }
+    .btn {
+      appearance: none;
+      border: 1px solid var(--fg);
+      background: var(--btn-bg);
+      color: var(--fg);
+      padding: 10px 12px;
+      border-radius: 10px;
+      font-size: 15px;
+      cursor: pointer;
+      transition: transform 120ms ease, background 120ms ease, opacity 120ms ease;
+      width: 100%;
+    }
+    .btn:hover { background: var(--btn-bg-hover); }
+    .btn:active { transform: translateY(1px) scale(0.98); }
+    .btn:focus-visible { outline: none; box-shadow: 0 0 0 3px var(--ring); }
+    .btn.secondary { border-color: var(--fg-muted); }
+    .footer {
+      text-align: center;
+      font-size: 11px;
+      opacity: 0.85;
+      min-height: 1em;
+    }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <div class="card" role="region" aria-label="Countdown timer (compact)">
+      <div class="section">
+        <div class="label">Minutes</div>
+        <div class="controls">
+          <input id="minutes" type="number" min="0" step="1" value="25" inputmode="numeric" aria-label="Minutes"/>
+          <button id="apply" class="btn secondary" title="Apply minutes">Set</button>
+        </div>
+      </div>
+
+      <div id="display" class="display" aria-atomic="true" aria-live="polite">25:00</div>
+
+      <div class="buttons">
+        <button id="startPause" class="btn" title="Start or pause">Start</button>
+        <button id="reset" class="btn secondary" title="Reset">Reset</button>
+      </div>
+
+      <div class="footer" id="status" aria-live="polite"></div>
+    </div>
+  </div>
+
+  <script>
+    (function () {
+      const minutesInput = document.getElementById('minutes');
+      const display = document.getElementById('display');
+      const startPauseBtn = document.getElementById('startPause');
+      const resetBtn = document.getElementById('reset');
+      const applyBtn = document.getElementById('apply');
+      const statusEl = document.getElementById('status');
+
+      let initialMinutes = clampMinutes(parseInt(minutesInput.value, 10) || 0);
+      let remainingMs = initialMinutes * 60_000;
+      let endTime = null;
+      let timerId = null;
+      let running = false;
+
+      function clampMinutes(v) {
+        if (Number.isNaN(v) || v < 0) return 0;
+        if (v > 24 * 60) return 24 * 60; // hard cap: 24h
+        return v;
+      }
+
+      function format(ms) {
+        ms = Math.max(0, ms);
+        const totalSeconds = Math.ceil(ms / 1000);
+        const m = Math.floor(totalSeconds / 60);
+        const s = totalSeconds % 60;
+        return `${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`;
+      }
+
+      function render() {
+        display.textContent = format(remainingMs);
+        startPauseBtn.textContent = running ? 'Pause' : (remainingMs === 0 ? 'Restart' : 'Start');
+        statusEl.textContent = running
+          ? 'Timer running'
+          : (remainingMs === 0 ? 'Time is up. Reset or set new minutes.' : 'Timer paused');
+      }
+
+      function tick() {
+        const now = Date.now();
+        remainingMs = endTime - now;
+        if (remainingMs <= 0) {
+          remainingMs = 0;
+          stop();
+          render();
+          const prevTitle = document.title;
+          document.title = 'Time is up';
+          setTimeout(() => (document.title = prevTitle), 2500);
+          return;
+        }
+        render();
+      }
+
+      function start() {
+        if (running) return;
+        if (remainingMs <= 0) {
+          remainingMs = initialMinutes * 60_000;
+        }
+        running = true;
+        endTime = Date.now() + remainingMs;
+        timerId = setInterval(tick, 250);
+        render();
+      }
+
+      function stop() {
+        running = false;
+        if (timerId) {
+          clearInterval(timerId);
+          timerId = null;
+        }
+        render();
+      }
+
+      function reset() {
+        stop();
+        remainingMs = initialMinutes * 60_000;
+        render();
+      }
+
+      startPauseBtn.addEventListener('click', () => {
+        running ? stop() : start();
+      });
+
+      resetBtn.addEventListener('click', reset);
+
+      applyBtn.addEventListener('click', () => {
+        const v = clampMinutes(parseInt(minutesInput.value, 10));
+        minutesInput.value = v;
+        initialMinutes = v;
+        stop();
+        remainingMs = initialMinutes * 60_000;
+        render();
+      });
+
+      minutesInput.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter') {
+          applyBtn.click();
+        }
+      });
+
+      render();
+      window.addEventListener('load', () => {
+        document.body.style.height = '100%';
+      });
+    })();
+  </script>
+</body>
+</html>
